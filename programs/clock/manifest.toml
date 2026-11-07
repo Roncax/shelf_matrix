@@ -1,0 +1,50 @@
+id = "clock"
+name = "Clock + weather"
+kind = "python"
+entry = "program:ClockProgram"
+needs = ["weather"]
+
+[[params]]
+name = "style"
+label = "Style"
+type = "choice"
+options = ["digital", "analog"]
+default = "digital"
+
+[[params]]
+name = "color"
+label = "Color"
+type = "color"
+default = "#ff9a3c"
+
+[[params]]
+name = "accent"
+label = "Accent color"
+type = "color"
+default = "#66ccff"
+
+[[params]]
+name = "font"
+label = "Digital font"
+type = "choice"
+options = ["6x10", "7x13B", "8x13B", "9x15B", "9x18B", "10x20"]
+default = "9x18B"
+
+[[params]]
+name = "hour24"
+label = "24-hour clock"
+type = "bool"
+default = true
+
+[[params]]
+name = "seconds"
+label = "Show seconds"
+type = "bool"
+default = false
+
+[[params]]
+name = "location"
+label = "Weather location"
+type = "text"
+default = ""
+max_len = 80

@@ -1,0 +1,20 @@
+"""Clock + weather program."""
+from __future__ import annotations
+
+from datetime import datetime
+
+from faces import render_analog, render_digital
+from shelf_matrix.program.base import Program
+
+
+class ClockProgram(Program):
+    @property
+    def fps(self) -> float:
+        p = self.ctx.params
+        return 4 if p.get("style") == "analog" and p.get("seconds") else 1
+
+    def draw(self, img, now: datetime) -> None:
+        p = self.ctx.params
+        weather = self.ctx.data.get("weather", {}).get(p.get("location", ""))
+        render = render_analog if p.get("style") == "analog" else render_digital
+        render(img, now, p, weather, self.ctx.fonts)
