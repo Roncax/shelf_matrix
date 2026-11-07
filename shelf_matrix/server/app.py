@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 CLOSE_UNAUTHORIZED = 4401
 CLOSE_REPLACED = 4000
+CLOSE_TOO_SLOW = 4002
 
 
 class _WsPeer:
@@ -37,6 +38,11 @@ class _WsPeer:
 
     async def send_bytes(self, data: bytes) -> None:
         await self.ws.send_bytes(data)
+
+    async def close(self) -> None:
+        """Close after the hub dropped us (e.g. a stalled send); best effort."""
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.ws.close(code=CLOSE_TOO_SLOW), 5.0)
 
 
 def _authorized(ws: WebSocket, token: str) -> bool:

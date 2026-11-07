@@ -12,6 +12,7 @@ own, and the program resumes as soon as it reappears in a later catalog.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, Protocol
@@ -21,6 +22,10 @@ from shelf_matrix.schema import GLOBAL_PARAMS, Manifest, ParamSpec, resolve_para
 from shelf_matrix.server.store import Store
 
 logger = logging.getLogger(__name__)
+
+# A suspended phone tab can stall a send for tens of seconds; never wait that
+# long, or every broadcast (and the Pi read loop behind it) freezes.
+BROWSER_SEND_TIMEOUT = 1.0
 
 
 class Peer(Protocol):
@@ -90,6 +95,7 @@ class Hub:
         self._last_seen: datetime | None = None
         self._data: dict[tuple[str, str], Any] = {}
         self._manifests: dict[str, Manifest] = {}
+        self._closing: set[asyncio.Task] = set()
         for d in store.catalog:
             m = _parse_manifest(d)
             if m is not None:
@@ -139,18 +145,30 @@ class Hub:
 
     async def _send_browser(self, peer: Peer, text: str | None = None, data: bytes | None = None) -> None:
         try:
-            if text is not None:
-                await peer.send_text(text)
-            else:
-                await peer.send_bytes(data)
+            send = peer.send_text(text) if text is not None else peer.send_bytes(data)
+            await asyncio.wait_for(send, BROWSER_SEND_TIMEOUT)
         except Exception as e:
-            logger.warning("dropping browser after failed send: %s", e)
-            await self.browser_disconnected(peer)
+            reason = "timed out" if isinstance(e, asyncio.TimeoutError) else f"failed: {e}"
+            logger.warning("dropping browser after send %s", reason)
+            await self._drop_browser(peer)
+
+    async def _drop_browser(self, peer: Peer) -> None:
+        await self.browser_disconnected(peer)
+        close = getattr(peer, "close", None)
+        if close is not None:
+            # In the background: closing a stalled socket may stall too. The
+            # browser reconnects and gets a fresh state.
+            task = asyncio.create_task(close())
+            self._closing.add(task)
+            task.add_done_callback(self._closing.discard)
+
+    async def _send_browsers(self, text: str | None = None, data: bytes | None = None) -> None:
+        # Concurrently, so N stalled browsers cost one timeout, not N.
+        await asyncio.gather(*(self._send_browser(peer, text=text, data=data)
+                               for peer in list(self._browsers)))
 
     async def _broadcast_state(self) -> None:
-        text = encode("state", **self.state_payload())
-        for peer in list(self._browsers):
-            await self._send_browser(peer, text=text)
+        await self._send_browsers(text=encode("state", **self.state_payload()))
 
     async def _error(self, peer: Peer, message: str) -> None:
         await self._send_browser(peer, text=encode("error", message=message))
@@ -245,8 +263,7 @@ class Hub:
         except ProtocolError:
             logger.debug("dropping invalid preview frame (%d bytes)", len(data))
             return
-        for peer in list(self._browsers):
-            await self._send_browser(peer, data=data)
+        await self._send_browsers(data=data)
 
     async def publish_data(self, topic: str, key: str, value: Any) -> None:
         self._data[(topic, key)] = value

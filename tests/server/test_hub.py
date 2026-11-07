@@ -385,3 +385,52 @@ async def test_active_program_missing_from_catalog_is_kept(store):
     await hub.on_client_message(hello(catalog=(CLOCK, SOLID, gone)))
     sync = hub2_pi.last("sync").payload
     assert sync["active_program"] == "gone" and "gone" in sync["params"]
+
+
+class StuckPeer(FakePeer):
+    """A suspended tab: sends never complete."""
+
+    def __init__(self):
+        super().__init__()
+        self.closed = False
+
+    async def send_text(self, text):
+        await asyncio.Event().wait()
+
+    async def send_bytes(self, data):
+        await asyncio.Event().wait()
+
+    async def close(self):
+        self.closed = True
+
+
+async def test_stuck_browser_is_dropped_without_blocking_broadcast(store, monkeypatch):
+    import shelf_matrix.server.hub as hub_mod
+    monkeypatch.setattr(hub_mod, "BROWSER_SEND_TIMEOUT", 0.2)
+    hub, pi = await connected_hub(store)
+    good, stuck1, stuck2 = FakePeer(), StuckPeer(), StuckPeer()
+    await hub.browser_connected(good)
+    hub._browsers.extend([stuck1, stuck2])  # connected earlier, now suspended
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await hub.on_client_message(Message("status", {"program": "solid", "state": "running"}))
+    elapsed = loop.time() - t0
+    assert elapsed < 0.35  # the two timeouts run concurrently, not back to back
+    assert good.last("state").payload["client"]["status"]["state"] == "running"
+    assert hub._browsers == [good]
+    await asyncio.sleep(0)
+    assert stuck1.closed and stuck2.closed
+
+
+async def test_stuck_browser_send_times_out_after_one_second(store):
+    hub, pi = await connected_hub(store)
+    good, stuck = FakePeer(), StuckPeer()
+    await hub.browser_connected(good)
+    hub._browsers.append(stuck)
+    frame = encode_preview(bytes(PREVIEW_BYTES))
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    await hub.on_client_preview(frame)
+    assert loop.time() - t0 < 1.5
+    assert good.frames == [frame]
+    assert hub._browsers == [good]
