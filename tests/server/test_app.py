@@ -9,6 +9,7 @@ from shelf_matrix.client.catalog import load_catalog
 from shelf_matrix.protocol import PREVIEW_BYTES, encode, encode_preview
 from shelf_matrix.server.app import create_app
 
+PROGRAMS = Path(__file__).resolve().parents[2] / "programs"
 TOKEN = "s3cret"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -21,7 +22,7 @@ def http(tmp_path):
 
 
 def hello(ws):
-    catalog = [m.to_dict() for m in load_catalog(Path("programs")).values()]
+    catalog = [m.to_dict() for m in load_catalog(PROGRAMS).values()]
     ws.send_text(encode("hello", client_version="t", catalog=catalog,
                         state={"active_program": "demo-life", "params": {}, "globals": {}}))
 
@@ -74,9 +75,8 @@ def test_ui_select_program_reaches_client(http):
     with http.websocket_connect("/ws/client", headers=AUTH) as pi:
         hello(pi)
         with http.websocket_connect("/ws/ui") as ui:
-            state = recv_kind(ui, "state")
-            pid = "demo-life"
-            ui.send_text(encode("select_program", program=pid))
+            recv_kind(ui, "state")
+            ui.send_text(encode("select_program", program="demo-life"))
             m = recv_kind(pi, "set_program")
     assert m["program"] == "demo-life"
 
@@ -118,13 +118,34 @@ def test_preview_relayed_to_ui(http):
             assert m["bytes"] == frame
 
 
+def test_ui_binary_frame_is_not_fatal(http):
+    with http.websocket_connect("/ws/ui") as ui:
+        recv(ui)
+        ui.send_bytes(b"\x00junk")
+        assert recv(ui)["kind"] == "error"
+        ui.send_text(encode("update_globals", globals={"brightness": 20}))
+        assert recv_kind(ui, "state")["globals"]["brightness"] == 20
+
+
 def test_newer_client_replaces_older(http):
-    with http.websocket_connect("/ws/client", headers=AUTH) as old:
-        hello(old)
-        recv_kind(old, "sync")
-        with http.websocket_connect("/ws/client", headers=AUTH) as new:
-            hello(new)
-            recv_kind(new, "sync")
-            with pytest.raises(WebSocketDisconnect):
+    with http.websocket_connect("/ws/ui") as ui:
+        recv(ui)
+        with http.websocket_connect("/ws/client", headers=AUTH) as old:
+            hello(old)
+            recv_kind(old, "sync")
+            with http.websocket_connect("/ws/client", headers=AUTH) as new:
+                hello(new)
+                recv_kind(new, "sync")
+                with pytest.raises(WebSocketDisconnect) as e:
+                    for _ in range(20):
+                        old.receive_text()
+                assert e.value.code == 4000
+                # a late frame from the replaced Pi must not reach the hub
+                old.send_text(encode("status", marker="stale"))
+                new.send_text(encode("status", marker="fresh"))
                 for _ in range(20):
-                    old.receive_text()
+                    st = recv(ui)
+                    if st["kind"] == "state" and st["client"]["status"]:
+                        break
+                assert st["client"]["online"] is True
+                assert st["client"]["status"]["marker"] == "fresh"

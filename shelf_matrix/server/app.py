@@ -103,6 +103,8 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
                 frame = await ws.receive()
                 if frame["type"] == "websocket.disconnect":
                     break
+                if not current_client or current_client[0] is not peer:
+                    break  # replaced by a newer connection
                 if frame.get("bytes") is not None:
                     await hub.on_client_preview(frame["bytes"])
                 elif frame.get("text") is not None:
@@ -126,14 +128,20 @@ def create_app(data_dir: Path | None = None, token: str | None = None,
         await hub.browser_connected(peer)
         try:
             while True:
-                text = await ws.receive_text()
+                frame = await ws.receive()
+                if frame["type"] == "websocket.disconnect":
+                    break
+                text = frame.get("text")
+                if text is None:
+                    await peer.send_text(encode("error", message="expected a text message"))
+                    continue
                 try:
                     msg = decode(text)
                 except ProtocolError as e:
                     await peer.send_text(encode("error", message=str(e)))
                     continue
                 await hub.on_browser_message(peer, msg)
-        except (WebSocketDisconnect, RuntimeError):  # peer gone, incl. failed send
+        except WebSocketDisconnect:
             pass
         finally:
             await hub.browser_disconnected(peer)

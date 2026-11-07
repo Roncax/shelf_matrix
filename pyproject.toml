@@ -23,6 +23,7 @@ include = ["shelf_matrix*"]
 shelf_matrix = ["server/static/*"]
 
 [tool.pytest.ini_options]
+filterwarnings = ["error", "ignore:Using `httpx` with `starlette.testclient`:UserWarning"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
