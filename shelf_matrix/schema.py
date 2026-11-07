@@ -32,6 +32,14 @@ class ParamSpec:
     step: float | None = None
     max_len: int = 200
 
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name, "label": self.label, "type": self.type,
+            "default": self.default, "options": list(self.options),
+            "min": self.min, "max": self.max, "step": self.step,
+            "max_len": self.max_len,
+        }
+
 
 @dataclass(frozen=True)
 class Manifest:
@@ -49,15 +57,7 @@ class Manifest:
             "id": self.id,
             "name": self.name,
             "kind": self.kind,
-            "params": [
-                {
-                    "name": p.name, "label": p.label, "type": p.type,
-                    "default": p.default, "options": list(p.options),
-                    "min": p.min, "max": p.max, "step": p.step,
-                    "max_len": p.max_len,
-                }
-                for p in self.params
-            ],
+            "params": [p.to_dict() for p in self.params],
             "entry": self.entry,
             "command": list(self.command) if self.command is not None else None,
             "needs": list(self.needs),

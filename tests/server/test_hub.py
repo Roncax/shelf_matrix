@@ -324,7 +324,20 @@ async def test_state_payload_shape(store):
     p = hub.state_payload()
     assert p == {"catalog": [], "active_program": None, "params": {},
                  "globals": {"brightness": 70},
-                 "client": {"online": False, "last_seen": None, "status": None}}
+                 "client": {"online": False, "last_seen": None, "status": None},
+                 "global_specs": [{"name": "brightness", "label": "Brightness", "type": "int",
+                                   "default": 70, "options": [], "min": 1, "max": 100,
+                                   "step": 1, "max_len": 200}]}
+
+
+async def test_state_includes_global_specs(store):
+    hub, _ = await connected_hub(store)
+    specs = hub.state_payload()["global_specs"]
+    assert [s["name"] for s in specs] == ["brightness"]
+    b = specs[0]
+    assert (b["type"], b["min"], b["max"], b["step"], b["default"]) == ("int", 1, 100, 1, 70)
+    # same shape as catalog params
+    assert set(b) == set(hub.state_payload()["catalog"][0]["params"][0])
 
 
 class YieldingPeer(FakePeer):

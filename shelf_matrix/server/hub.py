@@ -114,6 +114,7 @@ class Hub:
                 "last_seen": self._last_seen.isoformat() if self._last_seen else None,
                 "status": self._status,
             },
+            "global_specs": [spec.to_dict() for spec in GLOBAL_PARAMS],
         }
 
     def _persist(self) -> None:
