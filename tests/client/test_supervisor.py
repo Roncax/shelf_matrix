@@ -199,3 +199,93 @@ def _ppid(pid):
         return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[1])
     except (OSError, IndexError, ValueError):
         return -1
+
+
+def _spy_sends(sup):
+    sent = []
+    real = sup._send
+
+    async def spy(msg):
+        sent.append(msg)
+        await real(msg)
+
+    sup._send = spy
+    return sent
+
+
+async def test_live_globals_are_resolved_before_reaching_child(sup, statuses, previews):
+    await sup.start("solid", {}, {"brightness": 40}, {})
+    await wait_for(lambda: statuses[-1]["state"] == "running")
+    sent = _spy_sends(sup)
+    proc = sup._proc
+    await sup.update_globals({"brightness": 500, "bogus": 1})
+    assert sent == [{"kind": "globals", "globals": {"brightness": 70}}]
+    await sup.update_params({"color": "red", "bogus": 1})
+    assert sent[-1] == {"kind": "params", "params": {"color": "#ff0000"}}
+    await sup.set_preview(True)
+    await wait_for(lambda: previews, timeout=5)  # child still rendering
+    assert sup._proc is proc and proc.returncode is None
+    assert not any(s["state"] == "crashed" for s in statuses)
+
+
+async def test_params_for_requested_program_do_not_leak_into_fallback(sup_fast, statuses):
+    await sup_fast.start("demo-life", {"step_ms": 100}, {}, {})
+    await wait_for(lambda: statuses[-1]["state"] == "fallback")
+    assert sup_fast.current == "clock"
+    sent = _spy_sends(sup_fast)
+    proc = sup_fast._proc
+    await sup_fast.update_params({"step_ms": 200, "color": "#000000"})
+    assert not any(m["kind"] == "params" for m in sent)
+    assert sup_fast._proc is proc  # clock not restarted or touched
+
+
+async def test_unknown_program_without_fallback_clears_current(config, statuses, previews, monkeypatch):
+    monkeypatch.setenv("SHELF_MATRIX_FAKE", "1")
+    cat = load_catalog(REPO / "tests" / "fixtures" / "programs")
+    s = _make(config, cat, statuses, previews)
+    try:
+        await s.start("sleeper", {}, {}, {})
+        await s.start("nope", {}, {}, {})
+        assert s.current is None and s._proc is None
+        await s.update_globals({"brightness": 10})
+        assert s._proc is None
+        assert statuses[-1]["state"] == "crashed" and "not installed" in statuses[-1]["detail"]
+    finally:
+        await s.stop()
+
+
+async def test_reader_error_does_not_break_stop(sup, statuses, monkeypatch, caplog):
+    import shelf_matrix.client.supervisor as mod
+
+    def boom(_):
+        raise RuntimeError("reader boom")
+
+    monkeypatch.setattr(mod, "json", type("J", (), {"loads": staticmethod(boom), "dumps": staticmethod(__import__("json").dumps)}))
+    await sup.start("solid", {}, {}, {})
+    proc = sup._proc
+    await wait_for(lambda: "reading child stdout failed" in caplog.text)
+    await sup.stop()
+    assert proc.returncode is not None
+
+
+async def test_cancelled_stop_still_reaps_child(config, catalog, statuses, previews, tmp_path):
+    from shelf_matrix.schema import Manifest
+    flag = tmp_path / "armed"
+    catalog = {**catalog, "stubborn": Manifest(
+        id="stubborn", name="S", kind="command", params=(),
+        command=("{python}", "-c",
+                 "import signal,time,sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                 "open(sys.argv[1],'w').close(); time.sleep(60)", str(flag)))}
+    s = _make(config, catalog, statuses, previews, stop_timeout_s=0.5)
+    try:
+        await s.start("stubborn", {}, {}, {})
+        proc = s._proc
+        await wait_for(flag.exists)
+        task = asyncio.create_task(s.stop())
+        await asyncio.sleep(0.1)  # stop() is now waiting on the child
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await wait_for(lambda: proc.returncode is not None, timeout=3)
+    finally:
+        await s.stop()

@@ -17,6 +17,7 @@ from shelf_matrix.schema import GLOBAL_PARAMS, Manifest, resolve_params
 logger = logging.getLogger(__name__)
 
 MATRIX_FLAGS = "{matrix_flags}"
+READ_LIMIT = 1 << 20  # max child stdout line; a preview line is ~16 KiB
 
 
 def build_command(manifest: Manifest, params: dict, config: ClientConfig, brightness: int) -> list[str]:
@@ -64,7 +65,11 @@ class Supervisor:
         # Serializes every operation touching the child: one process at a time.
         self._lock = asyncio.Lock()
         self._manifest: Manifest | None = None
-        self._params: dict = {}
+        # The program the caller asked for; differs from _manifest.id while on
+        # the fallback. Params are stored per program id so params meant for
+        # the requested program never leak into the fallback.
+        self._requested: str | None = None
+        self._params: dict[str, dict] = {}
         self._globals: dict = {}
         self._data: dict = {}
         self._preview = False
@@ -73,6 +78,7 @@ class Supervisor:
         self._reader: asyncio.Task | None = None
         self._watcher: asyncio.Task | None = None
         self._retry: asyncio.Task | None = None
+        self._reap: asyncio.Task | None = None
         # Bumped on every spawn and every intentional stop; a watcher or retry
         # whose generation is stale belongs to a child we stopped on purpose.
         self._gen = 0
@@ -90,17 +96,18 @@ class Supervisor:
             self._crashes.clear()
             self._globals = dict(globals)
             self._data = {topic: dict(values) for topic, values in data.items()}
+            self._requested = program_id
+            self._params = {program_id: dict(params)}
             manifest = self._catalog.get(program_id)
             if manifest is None:
                 self._fallback_reason = f"unknown program {program_id!r}"
-                self._params = {}
                 manifest = self._catalog.get(self._config.fallback_program)
                 if manifest is None:
+                    self._manifest = None
                     await self._emit_missing_fallback()
                     return
             else:
                 self._fallback_reason = None
-                self._params = dict(params)
             self._manifest = manifest
             await self._spawn_locked()
 
@@ -108,17 +115,21 @@ class Supervisor:
         async with self._lock:
             await self._stop_locked()
             self._manifest = None
+            self._requested = None
             self._fallback_reason = None
 
     async def update_params(self, params: dict) -> None:
         async with self._lock:
-            self._params.update(params)
-            await self._update_locked({"kind": "params", "params": params})
+            if self._requested is None:
+                return
+            self._params.setdefault(self._requested, {}).update(params)
+            if self._manifest is not None and self._manifest.id == self._requested:
+                await self._update_locked({"kind": "params", "params": self._resolved_params()})
 
     async def update_globals(self, globals: dict) -> None:
         async with self._lock:
             self._globals.update(globals)
-            await self._update_locked({"kind": "globals", "globals": globals})
+            await self._update_locked({"kind": "globals", "globals": self._resolved_globals()})
 
     async def push_data(self, topic: str, key: str, value: Any) -> None:
         async with self._lock:
@@ -133,6 +144,13 @@ class Supervisor:
                 await self._send({"kind": "preview", "on": self._preview})
 
     # ----- internals (call with the lock held) ------------------------------
+
+    def _resolved_params(self) -> dict:
+        assert self._manifest is not None
+        return resolve_params(self._manifest.params, self._params.get(self._manifest.id))
+
+    def _resolved_globals(self) -> dict:
+        return resolve_params(GLOBAL_PARAMS, self._globals)
 
     def _is_python(self) -> bool:
         return self._manifest is not None and self._manifest.kind == "python"
@@ -161,8 +179,8 @@ class Supervisor:
         assert manifest is not None
         self._gen += 1
         gen = self._gen
-        params = resolve_params(manifest.params, self._params)
-        globals_ = resolve_params(GLOBAL_PARAMS, self._globals)
+        params = self._resolved_params()
+        globals_ = self._resolved_globals()
         await self._status("starting")
         try:
             if manifest.kind == "python":
@@ -170,6 +188,7 @@ class Supervisor:
                     sys.executable, "-m", "shelf_matrix.program.run",
                     "--config", str(self._config.path), str(manifest.path),
                     stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    limit=READ_LIMIT,
                 )
             else:
                 argv = build_command(manifest, params, self._config, globals_["brightness"])
@@ -179,7 +198,7 @@ class Supervisor:
             return
         self._proc = proc
         if manifest.kind == "python":
-            self._reader = asyncio.create_task(self._read_stdout(proc))
+            self._reader = asyncio.create_task(self._read_stdout(proc, gen))
             await self._send({
                 "kind": "init", "params": params, "globals": globals_,
                 "data": self._data, "preview": self._preview,
@@ -193,33 +212,58 @@ class Supervisor:
         if self._retry is not None:
             self._retry.cancel()
             self._retry = None
-        proc, self._proc = self._proc, None
+        proc = self._proc
         if proc is not None:
-            if proc.stdin is not None:
-                proc.stdin.close()
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass
-                try:
-                    await asyncio.wait_for(proc.wait(), self._stop_timeout_s)
-                except asyncio.TimeoutError:
-                    logger.warning("child %s ignored SIGTERM; killing", proc.pid)
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-                    await proc.wait()
+            # Shielded: even if our caller is cancelled, the child is still
+            # terminated and reaped, and _proc keeps tracking it until then.
+            if self._reap is None or self._reap.done():
+                self._reap = asyncio.create_task(self._terminate(proc))
+            await asyncio.shield(self._reap)
+            self._proc = None
         me = asyncio.current_task()
         for task in (self._reader, self._watcher):
             if task is not None and task is not me:
-                await task
+                try:
+                    await task
+                except Exception:
+                    logger.exception("child task failed")
         self._reader = self._watcher = None
+
+    async def _terminate(self, proc: asyncio.subprocess.Process) -> None:
+        if proc.stdin is not None:
+            proc.stdin.close()
+        if proc.returncode is not None:
+            return
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), self._stop_timeout_s)
+        except asyncio.TimeoutError:
+            logger.warning("child %s ignored SIGTERM; killing", proc.pid)
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
 
     # ----- background tasks -------------------------------------------------
 
-    async def _read_stdout(self, proc: asyncio.subprocess.Process) -> None:
+    async def _read_stdout(self, proc: asyncio.subprocess.Process, gen: int) -> None:
+        try:
+            await self._read_lines(proc, gen)
+        except Exception:
+            logger.exception("reading child stdout failed")
+            # Keep draining so the child never blocks on a full pipe.
+            assert proc.stdout is not None
+            try:
+                while await proc.stdout.read(65536):
+                    pass
+            except Exception:
+                logger.exception("draining child stdout failed")
+
+    async def _read_lines(self, proc: asyncio.subprocess.Process, gen: int) -> None:
         assert proc.stdout is not None
         async for raw in proc.stdout:
             try:
@@ -227,7 +271,7 @@ class Supervisor:
             except ValueError:
                 logger.warning("bad line from child: %r", raw[:100])
                 continue
-            if proc is not self._proc:
+            if proc is not self._proc or gen != self._gen:
                 continue  # stopped or crashed; don't report a stale "ready"
             kind = msg.get("kind") if isinstance(msg, dict) else None
             if kind == "ready":
@@ -279,7 +323,6 @@ class Supervisor:
             await self._stop_locked()  # reap the crashed child's tasks
             if manifest is not self._manifest:
                 self._manifest = manifest
-                self._params = {}
                 self._crashes.clear()
             self._fallback_reason = reason
             await self._spawn_locked()
