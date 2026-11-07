@@ -17,8 +17,14 @@ let ws = null;
 let backoff = BACKOFF_MIN_MS;
 let state = null;            // last `state` payload from the server
 let structureKey = null;     // catalog + global specs the DOM was built from
-let expanded = null;         // id of the program whose settings are unfolded
-const controls = new Map();  // "program/param" or "@global/param" -> control element
+// Which program's settings are unfolded: a program id, FOLDED (the user
+// deliberately folded everything), or null (not decided yet: follow the
+// active program).
+const FOLDED = Symbol("folded");
+let expanded = null;
+let lastActive;              // active_program seen by the last render
+let warnedOffline = false;   // "not connected" toast shown for this disconnect
+const controls = [];         // { values: () => object, name, el }
 const programEls = new Map(); // program id -> { root, button, panel }
 
 // ----- connection -----------------------------------------------------------
@@ -26,7 +32,8 @@ const programEls = new Map(); // program id -> { root, button, panel }
 function send(kind, payload) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ v: PROTOCOL_VERSION, kind, ...payload }));
-  } else {
+  } else if (!warnedOffline) {
+    warnedOffline = true;  // the banner keeps explaining it after this
     toast("Not connected to the server");
   }
 }
@@ -38,6 +45,7 @@ function connect() {
   ws.binaryType = "arraybuffer";
   ws.onopen = () => {
     backoff = BACKOFF_MIN_MS;
+    warnedOffline = false;
     $("server-banner").hidden = true;
   };
   ws.onmessage = (ev) => {
@@ -49,7 +57,8 @@ function connect() {
     $("server-banner").hidden = false;
     // The Pi's state is unknown until the server is back.
     $("pi").classList.remove("online");
-    $("pi-text").textContent = "Pi \u2014";
+    setText($("pi-text"), "Pi \u2014");
+    $("pi-seen").textContent = "";
     $("status").hidden = true;
     setTimeout(connect, backoff);
     backoff = Math.min(backoff * 2, BACKOFF_MAX_MS);
@@ -106,13 +115,35 @@ function render() {
     structureKey = key;
     build();
   }
-  if (expanded === null || !programEls.has(expanded)) expanded = state.active_program;
+  // Follow the active program when it changes (here or in another browser),
+  // unless the user deliberately folded everything.
+  const activeChanged = state.active_program !== lastActive;
+  lastActive = state.active_program;
+  if (expanded === null ||
+      (expanded !== FOLDED && (activeChanged || !programEls.has(expanded)))) {
+    expanded = state.active_program ?? null;
+  }
   update();
 }
 
 /** (Re)build the global controls and the program list from the specs. */
+/** createControl, or a placeholder row for a spec this UI can't render. */
+function safeControl(spec, value, onChange) {
+  try {
+    return createControl(spec, value, onChange);
+  } catch (e) {
+    console.warn(e);
+    const el = document.createElement("div");
+    el.className = "control control-unsupported";
+    el.textContent = `${spec.label ?? spec.name}: unsupported setting`;
+    el.setValue = () => {};
+    el.isBusy = () => false;
+    return el;
+  }
+}
+
 function build() {
-  controls.clear();
+  controls.length = 0;
   programEls.clear();
 
   const main = $("globals-main");
@@ -120,13 +151,18 @@ function build() {
   main.replaceChildren();
   moreBody.replaceChildren();
   for (const spec of state.global_specs || []) {
-    const el = createControl(spec, state.globals[spec.name], (value) => {
+    const el = safeControl(spec, state.globals[spec.name], (value) => {
       state.globals[spec.name] = value;
       send("update_globals", { globals: { [spec.name]: value } });
     });
-    controls.set(`@global/${spec.name}`, el);
+    controls.push({ values: () => state.globals, name: spec.name, el });
     if (spec.name === "brightness") {
       el.classList.add("brightness");
+      const sun = document.createElement("span");
+      sun.className = "sun";
+      sun.setAttribute("aria-hidden", "true");
+      sun.textContent = "\u2600";
+      el.querySelector(".control-label")?.prepend(sun);
       main.append(el);
     } else {
       moreBody.append(el);
@@ -164,11 +200,11 @@ function build() {
     }
     for (const spec of m.params) {
       const values = state.params[m.id] || {};
-      const el = createControl(spec, values[spec.name], (value) => {
+      const el = safeControl(spec, values[spec.name], (value) => {
         (state.params[m.id] ||= {})[spec.name] = value;
         send("update_params", { program: m.id, params: { [spec.name]: value } });
       });
-      controls.set(`${m.id}/${spec.name}`, el);
+      controls.push({ values: () => state.params[m.id], name: spec.name, el });
       panel.append(el);
     }
 
@@ -187,20 +223,20 @@ function build() {
 function onProgramTap(id) {
   if (id !== state.active_program) {
     state.active_program = id;     // optimistic; the next `state` confirms it
+    lastActive = id;
     expanded = id;
     send("select_program", { program: id });
   } else {
-    expanded = expanded === id ? "" : id;  // "" = all folded by choice
+    expanded = expanded === id ? FOLDED : id;
   }
   update();
 }
 
 /** Push current values and status into the existing DOM. */
 function update() {
-  for (const [key, el] of controls) {
+  for (const { values: get, name, el } of controls) {
     if (el.isBusy()) continue;
-    const [scope, name] = key.split("/");
-    const values = scope === "@global" ? state.globals : state.params[scope];
+    const values = get();
     if (values && name in values) el.setValue(values[name]);
   }
 
@@ -225,6 +261,11 @@ function update() {
   renderHeader();
 }
 
+/** Set text only when it changes, so live regions don't re-announce. */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 function nameOf(id) {
   const m = state.catalog.find((p) => p.id === id);
   return m ? m.name : id;
@@ -243,7 +284,10 @@ function renderHeader() {
   if (!state || !ws || ws.readyState !== WebSocket.OPEN) return;
   const { online, last_seen: lastSeen, status } = state.client;
   $("pi").classList.toggle("online", online);
-  $("pi-text").textContent = online ? "Pi online" : `Pi offline · seen ${ago(lastSeen)}`;
+  // Only #pi-text is a live region: it changes on online/offline, not on
+  // every tick of the "seen … ago" counter.
+  setText($("pi-text"), online ? "Pi online" : "Pi offline");
+  $("pi-seen").textContent = online ? "" : `· seen ${ago(lastSeen)}`;
 
   const el = $("status");
   if (!online || !status) {
@@ -253,7 +297,7 @@ function renderHeader() {
   const warn = status.state === "crashed" || status.state === "fallback";
   let text = `${nameOf(status.active_program)} · ${status.state}`;
   if (status.detail) text += ` — ${status.detail}`;
-  el.textContent = text;
+  setText(el, text);
   el.classList.toggle("warn", warn);
   el.hidden = false;
 }

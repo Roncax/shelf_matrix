@@ -17,9 +17,10 @@
   <main class="app">
     <header class="top">
       <h1 class="brand">Shelf<span>&middot;</span>Matrix</h1>
-      <div class="pi" id="pi" aria-live="polite">
-        <span class="dot"></span>
-        <span id="pi-text">Pi &mdash;</span>
+      <div class="pi" id="pi">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="pi-text" aria-live="polite">Pi &mdash;</span>
+        <span id="pi-seen"></span>
       </div>
     </header>
     <p class="status" id="status" aria-live="polite" hidden></p>

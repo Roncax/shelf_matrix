@@ -72,10 +72,13 @@ function rangeControl(spec, value, onChange) {
   };
   const send = debounce(onChange, DEBOUNCE_MS);
   let pointerDown = false;
-  input.addEventListener("pointerdown", () => { pointerDown = true; });
   const release = () => { pointerDown = false; };
-  input.addEventListener("pointerup", release);
-  input.addEventListener("pointercancel", release);
+  // Listen on window: the pointer may be released outside the slider.
+  input.addEventListener("pointerdown", () => {
+    pointerDown = true;
+    window.addEventListener("pointerup", release, { once: true });
+    window.addEventListener("pointercancel", release, { once: true });
+  });
   input.addEventListener("input", () => { show(); send(parse()); });
   input.addEventListener("change", () => { release(); send.flush(); });
 

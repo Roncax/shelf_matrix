@@ -73,6 +73,7 @@ body {
   box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.15);
 }
 .pi.online { color: var(--text); }
+#pi-seen { margin-left: -4px; }
 .pi.online .dot {
   background: var(--ok);
   box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.15), 0 0 10px rgba(74, 222, 128, 0.6);
@@ -248,7 +249,7 @@ input[type="text"] {
   padding: 0 12px;
   margin-bottom: 6px;
 }
-input[type="text"]::placeholder { color: #75737b; }
+input[type="text"]::placeholder { color: #8f8d95; }  /* 5:1 on --surface-2 */
 
 input[type="color"] {
   width: var(--tap);
@@ -312,10 +313,13 @@ input.switch:checked::after { transform: translateX(24px); background: #1a1206; 
   border-radius: var(--radius);
   padding: 4px 16px;
 }
-.brightness .control-label::before {
-  content: "\2600";
+.sun {
   color: var(--accent);
   margin-right: 8px;
+}
+.control-unsupported {
+  color: var(--muted);
+  font-size: 14px;
 }
 .globals details { border-top: 1px solid var(--line); }
 .globals summary {
