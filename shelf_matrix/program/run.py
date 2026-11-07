@@ -49,11 +49,14 @@ def main(argv: list[str] | None = None) -> int:
     init = json.loads(sys.stdin.readline())
     params = resolve_params(manifest.params, init.get("params"))
     globals_ = resolve_params(GLOBAL_PARAMS, init.get("globals"))
+    # Fill the font cache while still root: the real RGBMatrix drops privileges
+    # to `daemon`, after which the root-owned cache dir is read-only.
+    fonts = FontCache(config.fonts_dir, config.state_path.parent / "fontcache")
+    fonts.warm()
     matrix = create_matrix(config.matrix, globals_["brightness"])
     ctx = ProgramContext(
         params=params, globals=globals_, data=init.get("data") or {},
-        fonts=FontCache(config.fonts_dir, config.state_path.parent / "fontcache"),
-        width=config.matrix.cols, height=config.matrix.rows,
+        fonts=fonts, width=config.matrix.cols, height=config.matrix.rows,
     )
     inbox.put({"kind": "preview", "on": bool(init.get("preview"))})
     threading.Thread(target=_read_stdin, args=(inbox,), daemon=True).start()

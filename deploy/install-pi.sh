@@ -62,7 +62,7 @@ echo "==> Installing shelf-matrix"
 "${VENV}/bin/pip" install "${APP_DIR}[client]"
 
 echo "==> Config and state"
-mkdir -p "${CONF_DIR}" "${STATE_DIR}"
+mkdir -p "${CONF_DIR}" "${STATE_DIR}/fontcache"
 if [[ ! -f "${CONF_DIR}/config.toml" ]]; then
     install -m 600 "${REPO_ROOT}/deploy/config.example.toml" "${CONF_DIR}/config.toml"
     echo "Created ${CONF_DIR}/config.toml: edit server_url and token."
