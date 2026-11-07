@@ -1,7 +1,8 @@
 [Unit]
 Description=shelf-matrix LED matrix client
-After=network-online.target
-Wants=network-online.target
+# Start right away, even with Wi-Fi down: the server link reconnects on its own.
+After=local-fs.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

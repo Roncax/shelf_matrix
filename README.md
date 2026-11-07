@@ -62,6 +62,10 @@ Update: `git pull` in the checkout and re-run `sudo deploy/install-pi.sh`.
 
 Logs: `journalctl -u shelf-matrix -f`
 
+The `shelf-matrix` service starts at boot without waiting for the network, so
+the last program is shown even when Wi-Fi is down; the client keeps retrying
+the server in the background. systemd restarts it indefinitely if it exits.
+
 The `disable_hardware_pulsing` setting in the `[matrix]` config section is
 verified on the device; see `docs/device-notes.md` for the outcome.
 
