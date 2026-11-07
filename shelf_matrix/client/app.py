@@ -10,6 +10,7 @@ from shelf_matrix.client.state import LocalState, load_state, save_state
 from shelf_matrix.client.supervisor import Supervisor
 from shelf_matrix.config import ClientConfig
 from shelf_matrix.protocol import Message, encode_preview
+from shelf_matrix.schema import GLOBAL_PARAMS, resolve_params
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,16 @@ def _is_str_dict(v) -> bool:
 
 
 class ClientApp:
+    """Runs the cached program, then follows the server.
+
+    State contract: the server always sends full dicts, so `sync` replaces all
+    params and globals, `set_params` replaces one program's params and
+    `set_globals` replaces the globals. Whatever is pushed to the supervisor is
+    the full resolved dict for the stored state, so the running child always
+    matches what is persisted (a key the server dropped falls back to its
+    default instead of lingering).
+    """
+
     def __init__(self, config: ClientConfig, *, link_backoff: tuple[float, ...] | None = None) -> None:
         self.config = config
         self._link_backoff = link_backoff
@@ -40,7 +51,8 @@ class ClientApp:
         logger.info("catalog: %s", ", ".join(self.catalog) or "(empty)")
         self.supervisor = Supervisor(cfg, self.catalog, self._on_status, self._on_preview)
         kw = {} if self._link_backoff is None else {"backoff": self._link_backoff}
-        self.link = ServerLink(cfg.server_url, cfg.token, self._on_connect, self._on_message, **kw)
+        self.link = ServerLink(cfg.server_url, cfg.token, self._on_connect, self._on_message,
+                               on_disconnect=self._on_disconnect, **kw)
         try:
             # Show the cached program before (and regardless of) the server.
             await self._start_active()
@@ -72,6 +84,10 @@ class ClientApp:
         if self._last_status is not None:
             await self.link.send_json("status", **self._last_status)
 
+    async def _on_disconnect(self) -> None:
+        # Nobody is watching; the server re-sends preview_on after the next sync.
+        await self.supervisor.set_preview(False)
+
     async def _on_message(self, msg: Message) -> None:
         handler = getattr(self, f"_handle_{msg.kind}", None)
         if handler is None:
@@ -93,8 +109,8 @@ class ClientApp:
         if changed:
             await self._start_active()
         else:
-            await self.supervisor.update_params(s.params.get(program, {}))
-            await self.supervisor.update_globals(s.globals)
+            await self.supervisor.update_params(self._resolved_params(program))
+            await self.supervisor.update_globals(self._resolved_globals())
 
     async def _handle_set_program(self, p: dict) -> None:
         program, params = p.get("program"), p.get("params", None)
@@ -116,16 +132,16 @@ class ClientApp:
         self.state.params[program] = dict(params)
         self._persist()
         if program == self.state.active_program:
-            await self.supervisor.update_params(params)
+            await self.supervisor.update_params(self._resolved_params(program))
 
     async def _handle_set_globals(self, p: dict) -> None:
         globals_ = p.get("globals")
         if not _is_str_dict(globals_):
             logger.warning("ignoring malformed set_globals: %r", p)
             return
-        self.state.globals.update(globals_)
+        self.state.globals = dict(globals_)
         self._persist()
-        await self.supervisor.update_globals(globals_)
+        await self.supervisor.update_globals(self._resolved_globals())
 
     async def _handle_data(self, p: dict) -> None:
         topic, key = p.get("topic"), p.get("key")
@@ -147,7 +163,18 @@ class ClientApp:
     async def _start_active(self) -> None:
         s = self.state
         await self.supervisor.start(
-            s.active_program, s.params.get(s.active_program, {}), s.globals, s.data)
+            s.active_program, self._resolved_params(s.active_program),
+            self._resolved_globals(), s.data)
+
+    def _resolved_params(self, program: str) -> dict:
+        manifest = self.catalog.get(program)
+        stored = self.state.params.get(program)
+        if manifest is None:  # unknown here; the supervisor runs the fallback
+            return dict(stored or {})
+        return resolve_params(manifest.params, stored)
+
+    def _resolved_globals(self) -> dict:
+        return resolve_params(GLOBAL_PARAMS, self.state.globals)
 
     def _persist(self) -> None:
         try:

@@ -207,3 +207,106 @@ async def test_reconnects_after_server_restart(fake_server):
         await fake_server.start()
         await wait_for(lambda: len(fake_server.hellos()) == 2, timeout=10)
         assert fake_server.headers == ["Bearer t0ken", "Bearer t0ken"]
+
+
+async def test_same_program_sync_dropping_a_param_resets_it(fake_server):
+    config = fake_server.config
+    save_state(config.state_path, LocalState(
+        active_program="solid", params={"solid": {"color": "#00ff00"}}, globals={"brightness": 20}))
+    app = ClientApp(config, link_backoff=(0.1,))
+    async with running(app):
+        await wait_for(lambda: fake_server.hellos())
+        sup = app.supervisor
+        assert sup._resolved_params() == {"color": "#00ff00"}
+        pid = sup._proc.pid
+        await fake_server.send("sync", active_program="solid", params={"solid": {}}, globals={})
+        await wait_for(lambda: sup._resolved_params() == {"color": "#ff0000"})
+        await wait_for(lambda: sup._resolved_globals() == {"brightness": 70})
+        assert sup._proc.pid == pid  # updated live, not restarted
+        state = load_state(config.state_path)
+        assert state.params == {"solid": {}} and state.globals == {}
+
+
+async def test_set_globals_replaces(fake_server):
+    config = fake_server.config
+    app = ClientApp(config, link_backoff=(0.1,))
+    async with running(app):
+        await wait_for(lambda: fake_server.hellos())
+        sup = app.supervisor
+        await fake_server.send("set_globals", globals={"brightness": 20})
+        await wait_for(lambda: sup._resolved_globals() == {"brightness": 20})
+        await fake_server.send("set_globals", globals={})
+        await wait_for(lambda: sup._resolved_globals() == {"brightness": 70})
+        assert load_state(config.state_path).globals == {}
+
+
+async def test_preview_turned_off_when_link_drops(fake_server):
+    app = ClientApp(fake_server.config, link_backoff=(0.1,))
+    async with running(app):
+        await wait_for(lambda: fake_server.hellos())
+        await fake_server.send("preview_on")
+        await wait_for(lambda: app.supervisor._preview)
+        await fake_server.conns[-1].close()
+        await wait_for(lambda: not app.supervisor._preview)
+
+
+async def test_rejected_token_backs_off(tmp_path):
+    port = free_port()
+    connects: list[float] = []
+
+    async def reject(conn):
+        connects.append(time.monotonic())
+        await conn.close(4401, "bad token")
+
+    server = await serve(reject, "127.0.0.1", port)
+    try:
+        app = ClientApp(make_config(tmp_path, port), link_backoff=(0.1, 0.4, 0.8))
+        async with running(app):
+            await wait_for(lambda: len(connects) >= 3)
+    finally:
+        server.close()
+        await server.wait_closed()
+    gap1, gap2 = connects[1] - connects[0], connects[2] - connects[1]
+    assert gap1 >= 0.1 and gap2 >= 0.4 and gap2 > gap1
+
+
+def _child_pids(pid):
+    out = []
+    for stat in Path("/proc").glob("[0-9]*/stat"):
+        try:
+            fields = stat.read_text().rsplit(")", 1)[1].split()
+        except OSError:
+            continue
+        if int(fields[1]) == pid:
+            out.append(int(stat.parent.name))
+    return out
+
+
+def test_main_double_sigterm_stops_child(config_unreachable):
+    import os
+    import signal
+    import subprocess
+    import sys
+
+    config = config_unreachable
+    save_state(config.state_path, LocalState(active_program="solid"))
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "shelf_matrix.client", "--config", str(config.path)],
+        env={**os.environ, "SHELF_MATRIX_FAKE": "1"},
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.monotonic() + 10
+        while not _child_pids(proc.pid):
+            assert time.monotonic() < deadline, "client never spawned its program"
+            time.sleep(0.05)
+        child = _child_pids(proc.pid)[0]
+        time.sleep(0.5)
+        proc.send_signal(signal.SIGTERM)
+        time.sleep(0.05)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=10) == 0
+        assert not Path(f"/proc/{child}").exists()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()

@@ -16,12 +16,21 @@ async def _main(config: ClientConfig) -> None:
     # so clears the matrix) on the way out.
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
+    log = logging.getLogger(__name__)
+
+    def on_signal() -> None:
+        # Only the first signal cancels: a second one must not interrupt the
+        # supervisor's stop and orphan the child.
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, log.info, "already shutting down")
+        task.cancel()
+
     for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, task.cancel)
+        loop.add_signal_handler(sig, on_signal)
     try:
         await ClientApp(config).run()
     except asyncio.CancelledError:
-        logging.getLogger(__name__).info("shutting down")
+        log.info("shutting down")
 
 
 def main() -> None:
