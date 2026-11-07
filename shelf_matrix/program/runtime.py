@@ -40,14 +40,18 @@ def run_program(
     last_preview = float("-inf")
     ready = False
     frames = 0
+    pending: dict | None = None
     while max_frames is None or frames < max_frames:
         started = time.monotonic()
         changed = False
         while True:
-            try:
-                msg = inbox.get_nowait()
-            except queue.Empty:
-                break
+            if pending is not None:
+                msg, pending = pending, None
+            else:
+                try:
+                    msg = inbox.get_nowait()
+                except queue.Empty:
+                    break
             kind = msg.get("kind")
             if kind == "eof":
                 return
@@ -80,4 +84,9 @@ def run_program(
             _emit(out, {"kind": "preview", "rgb": base64.b64encode(img.tobytes()).decode("ascii")})
 
         if max_frames is None or frames < max_frames:
-            time.sleep(max(0.0, 1.0 / program.fps - (time.monotonic() - started)))
+            remaining = 1.0 / program.fps - (time.monotonic() - started)
+            if remaining > 0:
+                try:
+                    pending = inbox.get(timeout=remaining)
+                except queue.Empty:
+                    pass

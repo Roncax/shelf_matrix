@@ -5,6 +5,7 @@ import argparse
 import importlib
 import json
 import queue
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -17,7 +18,7 @@ from shelf_matrix.program.runtime import run_program
 from shelf_matrix.schema import GLOBAL_PARAMS, load_manifest, resolve_params
 
 
-def _read_stdin(inbox: "queue.Queue[dict]") -> None:
+def _read_stdin(inbox: "queue.SimpleQueue[dict]") -> None:
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -35,6 +36,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("program_dir", type=Path)
     args = ap.parse_args(argv)
 
+    # SimpleQueue.put is reentrant, so it is safe to call from a signal handler.
+    inbox: "queue.SimpleQueue[dict]" = queue.SimpleQueue()
+    signal.signal(signal.SIGTERM, lambda *_: inbox.put({"kind": "eof"}))
+
     config = load_client_config(args.config)
     manifest = load_manifest(args.program_dir)
     sys.path.insert(0, str(args.program_dir.resolve()))
@@ -50,10 +55,13 @@ def main(argv: list[str] | None = None) -> int:
         fonts=FontCache(config.fonts_dir, config.state_path.parent / "fontcache"),
         width=config.matrix.cols, height=config.matrix.rows,
     )
-    inbox: "queue.Queue[dict]" = queue.Queue()
     inbox.put({"kind": "preview", "on": bool(init.get("preview"))})
     threading.Thread(target=_read_stdin, args=(inbox,), daemon=True).start()
-    run_program(program_cls(ctx), matrix, ctx, inbox, sys.stdout)
+    try:
+        run_program(program_cls(ctx), matrix, ctx, inbox, sys.stdout)
+    finally:
+        if hasattr(matrix, "Clear"):
+            matrix.Clear()
     return 0
 
 

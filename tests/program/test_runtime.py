@@ -1,6 +1,8 @@
 import base64
 import io
 import json
+import os
+import signal
 import queue
 import subprocess
 import sys
@@ -74,7 +76,7 @@ def test_preview_emitted_only_when_on(make_ctx):
 
 
 def test_child_process_end_to_end(client_config_file):
-    env = {**__import__("os").environ, "SHELF_MATRIX_FAKE": "1"}
+    env = {**os.environ, "SHELF_MATRIX_FAKE": "1"}
     p = subprocess.Popen(
         [sys.executable, "-m", "shelf_matrix.program.run", "--config", str(client_config_file),
          str(REPO / "tests/fixtures/programs/solid")],
@@ -103,5 +105,46 @@ def test_child_process_end_to_end(client_config_file):
         if p.poll() is None:
             p.kill()
             p.wait()
+        p.stdout.close()
+        p.stderr.close()
+
+
+def test_params_and_eof_interrupt_slow_fps(make_ctx):
+    m = FakeMatrix(64, 64)
+    ctx = make_ctx(params={"color": "#ff0000"})
+    prog = Solid(ctx)
+    prog.fps = 0.2
+    inbox = queue.Queue()
+    t = threading.Thread(target=run_program, args=(prog, m, ctx, inbox, io.StringIO()))
+    t.start()
+    time.sleep(0.2)
+    assert m.last_image.getpixel((1, 1)) == (255, 0, 0)
+    inbox.put({"kind": "params", "params": {"color": "#00ff00"}})
+    time.sleep(0.5)
+    assert m.last_image.getpixel((1, 1)) == (0, 255, 0)
+    inbox.put({"kind": "eof"})
+    t.join(1)
+    assert not t.is_alive()
+
+
+def test_child_exits_cleanly_on_sigterm(client_config_file):
+    p = subprocess.Popen(
+        [sys.executable, "-m", "shelf_matrix.program.run", "--config", str(client_config_file),
+         str(REPO / "tests/fixtures/programs/solid")],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, env={**os.environ, "SHELF_MATRIX_FAKE": "1"}, cwd=REPO,
+    )
+    try:
+        p.stdin.write(json.dumps({"kind": "init", "params": {}, "globals": {},
+                                  "data": {}, "preview": False}) + "\n")
+        p.stdin.flush()
+        assert json.loads(p.stdout.readline())["kind"] == "ready"
+        p.send_signal(signal.SIGTERM)
+        assert p.wait(timeout=5) == 0
+    finally:
+        if p.poll() is None:
+            p.kill()
+            p.wait()
+        p.stdin.close()
         p.stdout.close()
         p.stderr.close()
