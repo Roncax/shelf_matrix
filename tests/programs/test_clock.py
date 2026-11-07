@@ -158,3 +158,23 @@ def test_program_fps_and_draw(fonts):
     img2 = blank()
     prog.draw(img2, datetime(2026, 11, 7, 21, 47))
     assert img2.tobytes() != img.tobytes()
+
+
+ODD_WEATHER = [{"temp_c": None}, {}, {"temp_c": 12.3}, {"temp_c": float("nan")},
+               {"temp_c": 5, "code": None, "is_day": None}, "garbage"]
+
+
+@pytest.mark.parametrize("weather", ODD_WEATHER)
+@pytest.mark.parametrize("render", [render_digital, render_analog])
+def test_odd_weather_payloads_do_not_crash(fonts, render, weather):
+    img = blank()
+    render(img, datetime(2026, 1, 1, 10, 10), DEFAULTS, weather, fonts)
+    assert img.getbbox() is not None
+
+
+@pytest.mark.parametrize("topic", [None, "x", [], {"": None}, {"": {"temp_c": None}}])
+@pytest.mark.parametrize("style", ["digital", "analog"])
+def test_program_tolerates_odd_weather_topic(fonts, topic, style):
+    mod = load_program_module()
+    ctx = ProgramContext(params={**DEFAULTS, "style": style}, globals={}, data={"weather": topic}, fonts=fonts)
+    mod.ClockProgram(ctx).draw(blank(), datetime(2026, 1, 1, 10, 10))

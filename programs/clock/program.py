@@ -15,6 +15,7 @@ class ClockProgram(Program):
 
     def draw(self, img, now: datetime) -> None:
         p = self.ctx.params
-        weather = self.ctx.data.get("weather", {}).get(p.get("location", ""))
+        topic = self.ctx.data.get("weather")
+        weather = topic.get(p.get("location", "")) if isinstance(topic, dict) else None
         render = render_analog if p.get("style") == "analog" else render_digital
         render(img, now, p, weather, self.ctx.fonts)

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from datetime import datetime
 
-from PIL import Image, ImageDraw
+from PIL import ImageDraw
 
 from icons import draw_icon, weather_group
 
@@ -30,8 +30,16 @@ def _text_width(draw: ImageDraw.ImageDraw, text: str, font) -> int:
     return int(draw.textlength(text, font=font))
 
 
+def _usable(weather) -> bool:
+    """True when the payload carries a finite numeric temperature."""
+    if not isinstance(weather, dict):
+        return False
+    t = weather.get("temp_c")
+    return isinstance(t, (int, float)) and not isinstance(t, bool) and math.isfinite(t)
+
+
 def _temp_text(weather: dict | None) -> str:
-    if weather is None:
+    if not _usable(weather):
         return "--\N{DEGREE SIGN}"
     return f"{round(weather['temp_c'])}\N{DEGREE SIGN}"
 
@@ -46,8 +54,8 @@ def _draw_weather(img, draw, weather, right: int, y: int, accent, fonts) -> None
     text = _temp_text(weather)
     tx = right - _text_width(draw, text, font)
     draw.text((tx, y), text, font=font, fill=accent)
-    if weather is not None:
-        group = weather_group(weather["code"], weather["is_day"])
+    if _usable(weather):
+        group = weather_group(weather.get("code"), weather.get("is_day", True) is not False)
         draw_icon(img, tx - 10, y - 1, group)
 
 
