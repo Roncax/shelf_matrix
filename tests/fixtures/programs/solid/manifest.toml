@@ -1,0 +1,10 @@
+id = "solid"
+name = "Solid"
+kind = "python"
+entry = "program:Solid"
+
+[[params]]
+name = "color"
+label = "Color"
+type = "color"
+default = "#ff0000"
