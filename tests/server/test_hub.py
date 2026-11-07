@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 import pytest
@@ -324,3 +325,50 @@ async def test_state_payload_shape(store):
     assert p == {"catalog": [], "active_program": None, "params": {},
                  "globals": {"brightness": 70},
                  "client": {"online": False, "last_seen": None, "status": None}}
+
+
+class YieldingPeer(FakePeer):
+    async def send_text(self, text):
+        await asyncio.sleep(0)
+        await super().send_text(text)
+
+
+async def test_concurrent_browser_connects_send_one_preview_on(store):
+    hub, pi = await connected_hub(store)
+    b1, b2 = YieldingPeer(), YieldingPeer()
+    await asyncio.gather(hub.browser_connected(b1), hub.browser_connected(b2))
+    assert pi.kinds() == ["preview_on"]
+    assert b1.kinds() == ["state"] and b2.kinds() == ["state"]
+    await asyncio.gather(hub.browser_disconnected(b1), hub.browser_disconnected(b2))
+    assert pi.kinds() == ["preview_on", "preview_off"]
+
+
+async def test_persist_failure_does_not_break_hub(store, monkeypatch, caplog):
+    hub, pi = await connected_hub(store)
+
+    def boom():
+        raise RuntimeError("disk gone")
+
+    monkeypatch.setattr(store, "save", boom)
+    browser = FakePeer()
+    await hub.browser_connected(browser)
+    with caplog.at_level(logging.WARNING):
+        await hub.on_browser_message(browser, Message("select_program", {"program": "clock"}))
+    assert pi.last("set_program").payload["program"] == "clock"
+    assert "error" not in browser.kinds()
+    assert "disk gone" in caplog.text
+
+
+async def test_active_program_missing_from_catalog_is_kept(store):
+    store.active_program = "gone"
+    hub, pi = await connected_hub(store)
+    hub2_pi = FakePeer()
+    await hub.client_connected(hub2_pi)
+    await hub.on_client_message(hello(catalog=(CLOCK, SOLID)))
+    assert hub2_pi.last("sync").payload["active_program"] == "gone"
+    assert hub.state_payload()["active_program"] == "gone"
+    assert store.active_program == "gone"
+    gone = dict(SOLID, id="gone", name="Gone")
+    await hub.on_client_message(hello(catalog=(CLOCK, SOLID, gone)))
+    sync = hub2_pi.last("sync").payload
+    assert sync["active_program"] == "gone" and "gone" in sync["params"]

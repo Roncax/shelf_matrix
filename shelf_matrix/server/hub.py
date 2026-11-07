@@ -5,6 +5,10 @@ Pi treats `sync`, `set_params` and `set_globals` as full replacements, so the
 hub always sends full resolved dicts; browser updates are partial and merged
 into the stored values first. Bad input from either side is logged or
 answered with `error`; it never raises out of the hub.
+
+An active program missing from the Pi's current catalog is kept (still sent
+in `sync` and reported by `state_payload`): the Pi runs its fallback on its
+own, and the program resumes as soon as it reappears in a later catalog.
 """
 from __future__ import annotations
 
@@ -115,7 +119,7 @@ class Hub:
     def _persist(self) -> None:
         try:
             self.store.save()
-        except OSError as e:
+        except Exception as e:
             logger.warning("could not save store: %s", e)
 
     def _touch(self) -> None:
@@ -250,10 +254,12 @@ class Hub:
     # ----- browser side -----------------------------------------------------
 
     async def browser_connected(self, peer: Peer) -> None:
+        # Decide "first" before any await so concurrent connects can't both miss it.
+        first = not self._browsers
         self._browsers.append(peer)
-        await self._send_browser(peer, text=encode("state", **self.state_payload()))
-        if len(self._browsers) == 1 and peer in self._browsers:
+        if first:
             await self._send_client("preview_on")
+        await self._send_browser(peer, text=encode("state", **self.state_payload()))
 
     async def browser_disconnected(self, peer: Peer) -> None:
         if peer not in self._browsers:

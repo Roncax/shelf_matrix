@@ -40,3 +40,17 @@ def test_store_wrong_types_start_empty(tmp_path):
     s = Store(path)
     assert s.active_program is None
     assert s.params == {}
+
+
+def test_store_failed_save_removes_tmp(tmp_path):
+    path = tmp_path / "store.json"
+    s = Store(path)
+    s.globals = {"bad": object()}  # not JSON serialisable
+    try:
+        s.save()
+    except TypeError:
+        pass
+    else:
+        raise AssertionError("expected TypeError")
+    assert not path.with_suffix(".tmp").exists()
+    assert not path.exists()
