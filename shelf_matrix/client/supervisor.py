@@ -90,7 +90,10 @@ class Supervisor:
 
     # ----- public API -------------------------------------------------------
 
-    async def start(self, program_id: str, params: dict, globals: dict, data: dict) -> None:
+    async def start(
+        self, program_id: str, params: dict, globals: dict, data: dict,
+        fallback_params: dict | None = None,
+    ) -> None:
         async with self._lock:
             await self._stop_locked()
             self._crashes.clear()
@@ -98,6 +101,8 @@ class Supervisor:
             self._data = {topic: dict(values) for topic, values in data.items()}
             self._requested = program_id
             self._params = {program_id: dict(params)}
+            # The user's saved settings for the fallback, used if we end up on it.
+            self._params.setdefault(self._config.fallback_program, dict(fallback_params or {}))
             manifest = self._catalog.get(program_id)
             if manifest is None:
                 self._fallback_reason = f"unknown program {program_id!r}"
@@ -124,6 +129,14 @@ class Supervisor:
                 return
             self._params.setdefault(self._requested, {}).update(params)
             if self._manifest is not None and self._manifest.id == self._requested:
+                await self._update_locked({"kind": "params", "params": self._resolved_params()})
+
+    async def update_fallback_params(self, params: dict) -> None:
+        """Store new settings for the fallback program; apply them if it is running."""
+        async with self._lock:
+            fallback = self._config.fallback_program
+            self._params.setdefault(fallback, {}).update(params)
+            if self._manifest is not None and self._manifest.id == fallback:
                 await self._update_locked({"kind": "params", "params": self._resolved_params()})
 
     async def update_globals(self, globals: dict) -> None:

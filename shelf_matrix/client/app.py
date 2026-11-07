@@ -110,6 +110,7 @@ class ClientApp:
             await self._start_active()
         else:
             await self.supervisor.update_params(self._resolved_params(program))
+            await self._push_fallback_params()
             await self.supervisor.update_globals(self._resolved_globals())
 
     async def _handle_set_program(self, p: dict) -> None:
@@ -133,6 +134,8 @@ class ClientApp:
         self._persist()
         if program == self.state.active_program:
             await self.supervisor.update_params(self._resolved_params(program))
+        elif program == self.config.fallback_program:
+            await self._push_fallback_params()
 
     async def _handle_set_globals(self, p: dict) -> None:
         globals_ = p.get("globals")
@@ -164,7 +167,14 @@ class ClientApp:
         s = self.state
         await self.supervisor.start(
             s.active_program, self._resolved_params(s.active_program),
-            self._resolved_globals(), s.data)
+            self._resolved_globals(), s.data,
+            fallback_params=self._resolved_params(self.config.fallback_program))
+
+    async def _push_fallback_params(self) -> None:
+        """Keep the fallback's settings current; applied live if it is running."""
+        fallback = self.config.fallback_program
+        if fallback != self.state.active_program:
+            await self.supervisor.update_fallback_params(self._resolved_params(fallback))
 
     def _resolved_params(self, program: str) -> dict:
         manifest = self.catalog.get(program)

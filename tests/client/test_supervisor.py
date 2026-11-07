@@ -289,3 +289,44 @@ async def test_cancelled_stop_still_reaps_child(config, catalog, statuses, previ
         await wait_for(lambda: proc.returncode is not None, timeout=3)
     finally:
         await s.stop()
+
+
+def _inits(sent):
+    return [m for m in sent if m["kind"] == "init"]
+
+
+async def test_crash_loop_fallback_runs_with_saved_clock_params(sup_fast, statuses):
+    sent = _spy_sends(sup_fast)
+    await sup_fast.start("crasher", {}, {}, {},
+                         fallback_params={"style": "analog", "color": "#00ff00"})
+    await wait_for(lambda: statuses[-1]["state"] == "fallback")
+    assert sup_fast.current == "clock"
+    params = _inits(sent)[-1]["params"]
+    assert params["style"] == "analog" and params["color"] == "#00ff00"
+
+
+async def test_unknown_program_fallback_runs_with_saved_clock_params(sup, statuses):
+    sent = _spy_sends(sup)
+    await sup.start("nope", {}, {}, {}, fallback_params={"color": "#123456"})
+    assert sup.current == "clock"
+    assert _inits(sent)[-1]["params"]["color"] == "#123456"
+
+
+async def test_clock_param_edit_during_fallback_reaches_child(sup_fast, statuses):
+    await sup_fast.start("crasher", {}, {}, {}, fallback_params={"color": "#00ff00"})
+    await wait_for(lambda: statuses[-1]["state"] == "fallback")
+    sent = _spy_sends(sup_fast)
+    proc = sup_fast._proc
+    await sup_fast.update_fallback_params({"color": "#0000ff"})
+    assert sent[-1]["kind"] == "params" and sent[-1]["params"]["color"] == "#0000ff"
+    assert sup_fast._proc is proc
+
+
+async def test_fallback_params_stored_while_not_on_fallback(sup, statuses):
+    await sup.start("solid", {}, {}, {}, fallback_params={"color": "#00ff00"})
+    await wait_for(lambda: statuses[-1]["state"] == "running")
+    sent = _spy_sends(sup)
+    await sup.update_fallback_params({"color": "#0000ff"})
+    assert sent == []
+    assert sup._params["clock"]["color"] == "#0000ff"
+    assert sup._params["solid"] == {}

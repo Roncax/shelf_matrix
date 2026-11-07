@@ -310,3 +310,22 @@ def test_main_double_sigterm_stops_child(config_unreachable):
         if proc.poll() is None:
             proc.kill()
             proc.wait()
+
+
+async def test_fallback_clock_uses_saved_clock_params_and_follows_edits(fake_server):
+    config = fake_server.config
+    save_state(config.state_path, LocalState(
+        active_program="nope", params={"clock": {"style": "analog", "color": "#00ff00"}}))
+    app = ClientApp(config, link_backoff=(0.1,))
+    async with running(app):
+        await wait_for(lambda: fake_server.hellos())
+        sup = app.supervisor
+        assert sup.current == "clock"
+        assert sup._resolved_params()["style"] == "analog"
+        assert sup._resolved_params()["color"] == "#00ff00"
+        pid = sup._proc.pid
+        await fake_server.send("set_params", program="clock", params={"color": "#0000ff"})
+        await wait_for(lambda: sup._resolved_params()["color"] == "#0000ff")
+        assert sup._resolved_params()["style"] == "digital"  # full replace: dropped key resets
+        assert sup._proc.pid == pid  # updated live, not restarted
+        assert load_state(config.state_path).active_program == "nope"
