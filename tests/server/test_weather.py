@@ -160,12 +160,15 @@ async def test_unknown_city_publishes_nothing(tmp_path):
 async def test_params_change_only_fetches_stale_locations(tmp_path):
     hub, published = make_hub(tmp_path, {"clock": {"location": "1,2"}})
     http, calls = make_http(ok_handler)
-    WeatherService(hub, http)
+    svc = WeatherService(hub, http)
     await hub._notify_params_changed()
+    await svc._task
     await hub._notify_params_changed()  # unrelated param change: no refetch
+    await svc._task
     assert len(calls) == 1 and len(published) == 1
     hub.store.params = {"clock": {"location": "3,4"}}
     await hub._notify_params_changed()
+    await svc._task
     assert len(calls) == 2
 
 
@@ -190,3 +193,61 @@ async def test_run_loops_and_survives_errors(tmp_path):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert published
+
+
+@pytest.mark.parametrize("loc", ["nan,1", "inf,1", "91,0", "0,181"])
+async def test_invalid_coordinates_fall_through_to_geocoding(loc):
+    http, calls = make_http(ok_handler)
+    await fetch_weather(http, loc)
+    assert "geocoding" in calls[0].url.host
+
+
+async def test_city_with_country_code_retries_with_city_only():
+    def handler(request):
+        if "geocoding" in request.url.host:
+            ok = request.url.params["name"] == "Paris"
+            return httpx.Response(200, json=GEO if ok else {})
+        return httpx.Response(200, json=FORECAST)
+
+    http, _ = make_http(handler)
+    w = await fetch_weather(http, "Paris, FR")
+    assert w is not None and w["location"] == "Paris, FR"
+
+
+async def test_negative_geocode_cache_expires(monkeypatch):
+    from shelf_matrix.server import weather
+
+    http, calls = make_http(lambda r: httpx.Response(200, json={}))
+    cache = {}
+    assert await fetch_weather(http, "Nowhere", cache) is None
+    assert await fetch_weather(http, "Nowhere", cache) is None
+    assert len(calls) == 1
+    real = weather.time.monotonic
+    monkeypatch.setattr(weather.time, "monotonic", lambda: real() + weather.NEGATIVE_TTL_S + 1)
+    await fetch_weather(http, "Nowhere", cache)
+    assert len(calls) == 2
+
+
+async def test_params_callback_does_not_block_and_close_cancels(tmp_path):
+    hub, published = make_hub(tmp_path, {"clock": {"location": "1,2"}})
+    gate = asyncio.Event()
+
+    class Slow(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            await gate.wait()
+            return httpx.Response(200, json=FORECAST)
+
+    svc = WeatherService(hub, httpx.AsyncClient(transport=Slow()))
+    await asyncio.wait_for(hub._notify_params_changed(), 1)
+    assert published == []
+    gate.set()
+    await svc._task
+    assert len(published) == 1
+
+    gate.clear()
+    svc2 = WeatherService(hub, httpx.AsyncClient(transport=Slow()))
+    await svc2._on_params_changed()
+    task = svc2._task
+    await asyncio.sleep(0)
+    await svc2.close()
+    assert task.cancelled() or task.done()

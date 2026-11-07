@@ -7,7 +7,9 @@ re-publishes) the last good value; this service never raises out of `run`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import math
 import time
 from datetime import datetime, timezone
 
@@ -20,6 +22,9 @@ logger = logging.getLogger(__name__)
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_S = 10.0
+NEGATIVE_TTL_S = 3600.0  # how long an unknown city stays cached
+
+GeoCache = dict[str, tuple[tuple[float, float] | None, float]]  # city -> (coords, expires)
 
 
 class WeatherError(Exception):
@@ -31,9 +36,12 @@ def _parse_latlon(location: str) -> tuple[float, float] | None:
     if len(parts) != 2:
         return None
     try:
-        return float(parts[0]), float(parts[1])
+        lat, lon = float(parts[0]), float(parts[1])
     except ValueError:
         return None
+    if not (math.isfinite(lat) and math.isfinite(lon) and -90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return lat, lon
 
 
 async def _get_json(http: httpx.AsyncClient, url: str, params: dict):
@@ -45,25 +53,33 @@ async def _get_json(http: httpx.AsyncClient, url: str, params: dict):
         raise WeatherError(f"{url}: {e}") from e
 
 
-async def _geocode(http: httpx.AsyncClient, city: str,
-                   cache: dict[str, tuple[float, float] | None] | None) -> tuple[float, float] | None:
-    if cache is not None and city in cache:
-        return cache[city]
-    data = await _get_json(http, GEOCODE_URL, {"name": city, "count": 1})
+async def _geocode_once(http: httpx.AsyncClient, name: str) -> tuple[float, float] | None:
+    data = await _get_json(http, GEOCODE_URL, {"name": name, "count": 1})
     try:
         results = data.get("results")
-        coords = None
         if results:
-            coords = (float(results[0]["latitude"]), float(results[0]["longitude"]))
+            return float(results[0]["latitude"]), float(results[0]["longitude"])
     except (AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
         raise WeatherError(f"malformed geocoding response: {e}") from e
+    return None
+
+
+async def _geocode(http: httpx.AsyncClient, city: str, cache: GeoCache | None) -> tuple[float, float] | None:
+    now = time.monotonic()
+    if cache is not None and city in cache and cache[city][1] > now:
+        return cache[city][0]
+    coords = await _geocode_once(http, city)
+    if coords is None and "," in city:  # "Paris, FR": retry with just the city
+        head = city.split(",", 1)[0].strip()
+        if head:
+            coords = await _geocode_once(http, head)
     if cache is not None:
-        cache[city] = coords
+        cache[city] = (coords, math.inf if coords else now + NEGATIVE_TTL_S)
     return coords
 
 
 async def fetch_weather(http: httpx.AsyncClient, location: str,
-                        geo_cache: dict[str, tuple[float, float] | None] | None = None) -> dict | None:
+                        geo_cache: GeoCache | None = None) -> dict | None:
     """Current weather for "lat,lon" or a city name; None if the city is unknown."""
     coords = _parse_latlon(location)
     if coords is None:
@@ -98,7 +114,9 @@ class WeatherService:
         self._hub = hub
         self._http = http
         self._interval_s = interval_s
-        self._geo_cache: dict[str, tuple[float, float] | None] = {}
+        self._geo_cache: GeoCache = {}
+        self._task: asyncio.Task | None = None
+        self._dirty = False
         self._last: dict[str, dict] = {}
         self._fresh_at: dict[str, float] = {}  # monotonic time of last attempt
         hub.on_params_changed.append(self._on_params_changed)
@@ -138,11 +156,29 @@ class WeatherService:
             logger.exception("weather refresh for %r failed", location)
 
     async def _on_params_changed(self) -> None:
-        """Fetch only locations not attempted within the interval."""
-        now = time.monotonic()
-        for loc in self.locations():
-            if now - self._fresh_at.get(loc, -self._interval_s - 1) >= self._interval_s:
-                await self._refresh_safely(loc)
+        """Refresh in the background so the hub's message loop never waits on the API.
+
+        One task at a time; a change arriving meanwhile makes it take another pass.
+        """
+        self._dirty = True
+        if self._task is None or self._task.done():
+            self._task = asyncio.create_task(self._drain())
+
+    async def _drain(self) -> None:
+        while self._dirty:
+            self._dirty = False
+            now = time.monotonic()
+            for loc in self.locations():
+                if now - self._fresh_at.get(loc, -self._interval_s - 1) >= self._interval_s:
+                    await self._refresh_safely(loc)
+
+    async def close(self) -> None:
+        """Cancel any pending background refresh (call at shutdown)."""
+        task, self._task = self._task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
 
     async def run(self) -> None:
         while True:
