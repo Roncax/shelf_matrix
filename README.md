@@ -1,9 +1,11 @@
 # shelf-matrix
 
-Python package `shelf_matrix` for driving an LED matrix on a Raspberry Pi:
-a server (Docker) that runs programs, a Pi client that displays frames, and
-the programs themselves. Each program ships a `manifest.toml` describing its
-tunable parameters.
+Python package `shelf_matrix` for driving a 64x64 LED matrix on a Raspberry
+Pi. The Pi client runs the programs itself (one child process at a time) and
+keeps showing the last one even when the server is unreachable. The server
+(Docker) stores the settings, serves the web UI and fetches the weather; the
+Pi connects to it over a WebSocket. Each program ships a `manifest.toml`
+describing its tunable parameters.
 
 ## Development
 
@@ -66,8 +68,9 @@ The `shelf-matrix` service starts at boot without waiting for the network, so
 the last program is shown even when Wi-Fi is down; the client keeps retrying
 the server in the background. systemd restarts it indefinitely if it exits.
 
-The `disable_hardware_pulsing` setting in the `[matrix]` config section is
-verified on the device; see `docs/device-notes.md` for the outcome.
+The `disable_hardware_pulsing` setting in the `[matrix]` config section still
+has to be verified on the device; the outcome will be recorded in
+`docs/device-notes.md`, written during on-device verification.
 
 ## License
 
