@@ -1,7 +1,7 @@
 # Shelf Matrix — Design
 
 Date: 2026-11-07
-Status: draft, awaiting owner approval
+Status: approved by owner (2026-11-07)
 
 ## Intent
 
