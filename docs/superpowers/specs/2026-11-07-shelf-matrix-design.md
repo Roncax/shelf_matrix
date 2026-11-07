@@ -223,8 +223,15 @@ changes visible on the matrix within about a second.
 - Install script should also disable the onboard audio driver (`snd_bcm2835`) so
   hardware pulse can be used; the config keeps a switch for
   `--led-no-hardware-pulse` in case it's still needed.
-- Updating the Pi: `git pull` + rerun install / restart service. No CI/CD needed
-  in v1.
+- Updating the Pi: `git pull` + rerun install / restart service. No CI/CD for the
+  Pi in v1.
+- **Server CI/CD** (owner's addition): a GitHub Action builds the server image and
+  pushes it to GitHub Container Registry (`ghcr.io/roncax/shelf-matrix-server`) on
+  every push to `main` (tag `latest` + commit SHA) and on version tags. Tests run
+  first; no push if they fail. The home server pulls new images automatically
+  (builder's call: a systemd timer / cron running `docker compose pull && docker
+  compose up -d`, rather than a third-party updater container). Image built for
+  `linux/amd64` and `linux/arm64` since the home server's CPU isn't recorded here.
 
 ## Repo layout (suggested)
 

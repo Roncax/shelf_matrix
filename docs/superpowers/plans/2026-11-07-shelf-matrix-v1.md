@@ -607,17 +607,28 @@ async def test_reconnects_after_server_restart(fake_server):  # close server, re
 
 ---
 
-### Task 13: Server Docker image
+### Task 13: Server Docker image, GHCR publishing, auto-update
 
 **Files:**
-- Create: `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/.env.example`, `.dockerignore`
+- Create: `deploy/Dockerfile`, `deploy/docker-compose.yml`, `deploy/.env.example`, `.dockerignore`, `.github/workflows/server-image.yml`, `deploy/server-update.sh`, `deploy/shelf-matrix-update.service`, `deploy/shelf-matrix-update.timer`
 
 **Interfaces:**
 - Produces:
-  - Image: `python:3.11-slim`, `pip install .[server]`, non-root user, `EXPOSE 8080`, `CMD ["python", "-m", "shelf_matrix.server"]`, and a `HEALTHCHECK` on `/healthz`.
-  - Compose: service `shelf-matrix-server` with `build: {context: .., dockerfile: deploy/Dockerfile}`, `ports: ["8080:8080"]`, `env_file: .env` (`SHELF_TOKEN`), volume `shelf-data:/data`, `restart: unless-stopped`.
+  - Image: `python:3.11-slim`, `pip install .[server]`, non-root user, `EXPOSE 8080`, `CMD ["python", "-m", "shelf_matrix.server"]`, a `HEALTHCHECK` on `/healthz`, and label `org.opencontainers.image.source=https://github.com/Roncax/shelf-matrix`.
+  - Compose: service `shelf-matrix-server` with `image: ghcr.io/roncax/shelf-matrix-server:latest` and `build: {context: .., dockerfile: deploy/Dockerfile}` (local builds still work), `ports: ["8080:8080"]`, `env_file: .env` (`SHELF_TOKEN`), volume `shelf-data:/data`, `restart: unless-stopped`.
+  - Workflow `server-image.yml`:
+    - Triggers: push to `main`, tags `v*`, `workflow_dispatch`.
+    - Job `test`: Python 3.11, `pip install -e '.[dev]'`, `pytest`.
+    - Job `image` (`needs: test`, `permissions: {contents: read, packages: write}`) uses `docker/setup-qemu-action`, `docker/setup-buildx-action`, `docker/login-action` (registry `ghcr.io`, `GITHUB_TOKEN`), `docker/metadata-action` and `docker/build-push-action`, with GHA cache. Pin each action to its current major version.
+    - Platforms: `linux/amd64,linux/arm64`.
+    - Tags from metadata-action: `latest` on main, `sha-<short>`, semver on `v*` tags.
+    - Image name: lowercase `ghcr.io/roncax/shelf-matrix-server`.
+  - Auto-update on the home server:
+    - `server-update.sh <compose dir>` runs `docker compose pull` and `docker compose up -d`, then `docker image prune -f`.
+    - The systemd timer runs it every 15 min (`OnUnitActiveSec=15min`, `OnBootSec=2min`).
+    - The README explains installing the timer, and also covers `docker login ghcr.io` with a `read:packages` token in case the package stays private. Making the package public is simpler, since the image contains no secrets.
 
-- [ ] **Step 1: Write the files**.
+- [ ] **Step 1: Write the files**. Validate the workflow with `actionlint` if available (otherwise `python -c "import yaml,sys; yaml.safe_load(open('.github/workflows/server-image.yml'))"`).
 - [ ] **Step 2: Verify**:
   1. `cd deploy && cp .env.example .env && sed -i 's/^SHELF_TOKEN=.*/SHELF_TOKEN=dev/' .env && docker compose up -d --build`.
   2. `curl -s localhost:8080/healthz` → `{"ok":true}`.
