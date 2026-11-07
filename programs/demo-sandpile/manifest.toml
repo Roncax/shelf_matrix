@@ -1,0 +1,13 @@
+id = "demo-sandpile"
+name = "Sandpile"
+kind = "command"
+command = ["{library_dir}/examples-api-use/demo", "-D6", "-m", "{step_ms}", "{matrix_flags}"]
+
+[[params]]
+name = "step_ms"
+label = "Step (ms)"
+type = "int"
+default = 50
+min = 10
+max = 2000
+step = 10

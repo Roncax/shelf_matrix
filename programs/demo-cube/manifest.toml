@@ -1,0 +1,4 @@
+id = "demo-cube"
+name = "3D cube"
+kind = "command"
+command = ["{library_dir}/examples-api-use/demo", "-D12", "{matrix_flags}"]

@@ -1,0 +1,13 @@
+id = "demo-life"
+name = "Game of Life"
+kind = "command"
+command = ["{library_dir}/examples-api-use/demo", "-D7", "-m", "{step_ms}", "{matrix_flags}"]
+
+[[params]]
+name = "step_ms"
+label = "Step (ms)"
+type = "int"
+default = 100
+min = 10
+max = 2000
+step = 10

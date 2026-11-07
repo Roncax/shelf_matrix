@@ -1,0 +1,4 @@
+id = "sleeper"
+name = "Sleeper"
+kind = "command"
+command = ["{python}", "-c", "import time,sys; print(sys.argv[1:], flush=True); time.sleep(60)", "{matrix_flags}"]
