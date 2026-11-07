@@ -38,6 +38,33 @@ Auto-update: install the systemd units to pull a new image every 15 minutes.
 The service runs `/opt/shelf-matrix-server/server-update.sh
 /opt/shelf-matrix-server`; edit the unit if you use another directory.
 
+## Pi deployment
+
+Target: Raspberry Pi Zero W with the Adafruit RGB Matrix HAT, running
+Raspberry Pi OS Lite (Bookworm) with SSH enabled and network access.
+
+On the Pi, clone the repository and run the installer:
+
+    git clone https://github.com/Roncax/shelf-matrix.git
+    cd shelf-matrix
+    sudo deploy/install-pi.sh
+
+The first run builds the matrix library bindings, which takes a long time on a
+Zero. The installer is idempotent and pins the library to a known commit
+(override with `LIB_REPO` and `LIB_COMMIT`). Then edit
+`/etc/shelf-matrix/config.toml`, set `server_url` and `token`, and reboot
+(needed for the onboard audio to be disabled):
+
+    sudo nano /etc/shelf-matrix/config.toml
+    sudo reboot
+
+Update: `git pull` in the checkout and re-run `sudo deploy/install-pi.sh`.
+
+Logs: `journalctl -u shelf-matrix -f`
+
+The `disable_hardware_pulsing` setting in the `[matrix]` config section is
+verified on the device; see `docs/device-notes.md` for the outcome.
+
 ## License
 
 GPL-2.0-or-later. See LICENSE.
