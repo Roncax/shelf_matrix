@@ -148,3 +148,42 @@ def test_child_exits_cleanly_on_sigterm(client_config_file):
         p.stdin.close()
         p.stdout.close()
         p.stderr.close()
+
+
+def test_seconds_to_next_tick_aligns_to_wall_clock():
+    from datetime import datetime
+    from shelf_matrix.program.runtime import ALIGN_SLACK, seconds_to_next_second
+    assert abs(seconds_to_next_second(datetime(2026, 1, 1, 12, 0, 0, 0)) - (1.0 + ALIGN_SLACK)) < 1e-9
+    assert abs(seconds_to_next_second(datetime(2026, 1, 1, 12, 0, 0, 250000)) - (0.75 + ALIGN_SLACK)) < 1e-9
+    assert abs(seconds_to_next_second(datetime(2026, 1, 1, 12, 0, 0, 999000)) - (0.001 + ALIGN_SLACK)) < 1e-9
+
+
+def test_aligned_program_sleeps_until_next_second(make_ctx):
+    from datetime import datetime
+    m = FakeMatrix(64, 64)
+    ctx = make_ctx(params={"color": "#ff0000"})
+    prog = Solid(ctx)
+    prog.fps = 1
+    prog.align_to_second = True
+    inbox = queue.Queue()
+    t0 = time.monotonic()
+    run_program(prog, m, ctx, inbox, io.StringIO(), max_frames=2,
+                now=lambda: datetime(2026, 1, 1, 12, 0, 0, 900000))
+    assert time.monotonic() - t0 < 0.5  # ~0.105 s to the next whole second, not 1 s
+
+
+def test_aligned_sleep_is_interruptible(make_ctx):
+    from datetime import datetime
+    m = FakeMatrix(64, 64)
+    ctx = make_ctx(params={"color": "#ff0000"})
+    prog = Solid(ctx)
+    prog.fps = 1
+    prog.align_to_second = True
+    inbox = queue.Queue()
+    t = threading.Thread(target=run_program, args=(prog, m, ctx, inbox, io.StringIO()),
+                         kwargs={"now": lambda: datetime(2026, 1, 1, 12, 0, 0, 0)})
+    t.start()
+    time.sleep(0.1)
+    inbox.put({"kind": "eof"})
+    t.join(0.5)
+    assert not t.is_alive()

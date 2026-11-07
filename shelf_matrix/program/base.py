@@ -22,6 +22,9 @@ class ProgramContext:
 
 class Program:
     fps: float = 1.0
+    # With fps == 1, tick just after each wall-clock second instead of every
+    # 1 s of elapsed time (which drifts and occasionally skips a second).
+    align_to_second: bool = False
 
     def __init__(self, ctx: ProgramContext) -> None:
         self.ctx = ctx

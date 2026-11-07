@@ -151,8 +151,9 @@ def test_program_fps_and_draw(fonts):
     ctx.params["location"] = "Rome"
     prog.draw(img, datetime(2026, 11, 7, 21, 47))
     assert ACCENT in colors(img)
+    assert prog.align_to_second is True
     ctx.params.update(style="analog", seconds=True)
-    assert prog.fps == 4
+    assert prog.fps == 1 and prog.align_to_second is True
     ctx.params["seconds"] = False
     assert prog.fps == 1
     img2 = blank()

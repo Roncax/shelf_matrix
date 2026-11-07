@@ -13,6 +13,13 @@ from PIL import Image
 from shelf_matrix.program.base import Program, ProgramContext
 
 PREVIEW_INTERVAL = 1.0
+# Wake a little after the second boundary so the new second is already showing.
+ALIGN_SLACK = 0.005
+
+
+def seconds_to_next_second(now: datetime) -> float:
+    """Delay until just after the next whole wall-clock second."""
+    return 1.0 - now.microsecond / 1_000_000 + ALIGN_SLACK
 
 
 def _emit(out: TextIO, msg: dict) -> None:
@@ -84,7 +91,10 @@ def run_program(
             _emit(out, {"kind": "preview", "rgb": base64.b64encode(img.tobytes()).decode("ascii")})
 
         if max_frames is None or frames < max_frames:
-            remaining = 1.0 / program.fps - (time.monotonic() - started)
+            if program.align_to_second and program.fps == 1:
+                remaining = seconds_to_next_second(now())
+            else:
+                remaining = 1.0 / program.fps - (time.monotonic() - started)
             if remaining > 0:
                 try:
                     pending = inbox.get(timeout=remaining)

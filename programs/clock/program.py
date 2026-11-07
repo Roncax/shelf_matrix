@@ -8,10 +8,8 @@ from shelf_matrix.program.base import Program
 
 
 class ClockProgram(Program):
-    @property
-    def fps(self) -> float:
-        p = self.ctx.params
-        return 4 if p.get("style") == "analog" and p.get("seconds") else 1
+    fps = 1.0
+    align_to_second = True  # seconds never skip, in either style
 
     def draw(self, img, now: datetime) -> None:
         p = self.ctx.params
