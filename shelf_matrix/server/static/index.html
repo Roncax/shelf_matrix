@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0c0c0e">
+  <title>Shelf Matrix</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/app.js"></script>
+</head>
+<body>
+  <div id="server-banner" class="banner" role="status" hidden>
+    Offline from server &mdash; reconnecting&hellip;
+  </div>
+
+  <main class="app">
+    <header class="top">
+      <h1 class="brand">Shelf<span>&middot;</span>Matrix</h1>
+      <div class="pi" id="pi">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="pi-text" aria-live="polite">Pi &mdash;</span>
+        <span id="pi-seen"></span>
+      </div>
+    </header>
+    <p class="status" id="status" aria-live="polite" hidden></p>
+
+    <section class="stage" aria-label="Live preview">
+      <div class="bezel">
+        <canvas id="preview" width="64" height="64" role="img"
+                aria-label="Live preview of the LED matrix"></canvas>
+        <div class="leds" aria-hidden="true"></div>
+        <div class="no-preview" id="no-preview">no preview</div>
+      </div>
+    </section>
+
+    <section class="globals" aria-label="Display settings">
+      <div id="globals-main"></div>
+      <details id="globals-more" hidden>
+        <summary>More</summary>
+        <div id="globals-more-body"></div>
+      </details>
+    </section>
+
+    <h2 class="section-title">Programs</h2>
+    <div id="programs" class="programs"></div>
+  </main>
+
+  <div id="toast" class="toast" role="alert" hidden></div>
+</body>
+</html>

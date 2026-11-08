@@ -1,0 +1,4 @@
+id = "crasher"
+name = "Crasher"
+kind = "python"
+entry = "program:Crasher"

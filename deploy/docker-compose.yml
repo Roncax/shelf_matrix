@@ -1,0 +1,15 @@
+services:
+  shelf-matrix-server:
+    image: ghcr.io/roncax/shelf-matrix-server:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file: .env
+    volumes:
+      - shelf-data:/data
+    restart: unless-stopped
+
+volumes:
+  shelf-data:

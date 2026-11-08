@@ -1,0 +1,11 @@
+.git
+.github
+.venv
+.superpowers
+tests
+docs
+fonts
+programs
+deploy/.env
+**/__pycache__
+*.egg-info

@@ -1,0 +1,18 @@
+server_url = "ws://homeserver.lan:8080/ws/client"
+token = "change-me"
+library_dir = "/opt/rpi-rgb-led-matrix"
+programs_dir = "/opt/shelf-matrix/programs"
+fonts_dir = "/opt/shelf-matrix/fonts"
+state_path = "/var/lib/shelf-matrix/state.json"
+fallback_program = "clock"
+
+[matrix]
+rows = 64
+cols = 64
+hardware_mapping = "adafruit-hat-pwm"
+pwm_bits = 9
+pwm_lsb_nanoseconds = 50
+limit_refresh_rate_hz = 120
+pixel_mapper_config = "Rotate:90"
+disable_hardware_pulsing = true
+# gpio_slowdown = 2   # unset by default

@@ -1,0 +1,8 @@
+[Unit]
+Description=Update the shelf-matrix server container
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/shelf-matrix-server/server-update.sh /opt/shelf-matrix-server

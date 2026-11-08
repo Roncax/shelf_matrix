@@ -1,0 +1,19 @@
+[Unit]
+Description=shelf-matrix LED matrix client
+# Start right away, even with Wi-Fi down: the server link reconnects on its own.
+After=local-fs.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/shelf-matrix
+ExecStart=/opt/shelf-matrix/venv/bin/python -m shelf_matrix.client --config /etc/shelf-matrix/config.toml
+Restart=always
+RestartSec=2
+Nice=-5
+KillSignal=SIGTERM
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target
