@@ -47,7 +47,7 @@ Raspberry Pi OS Lite (Bookworm) with SSH enabled and network access.
 
 On the Pi, clone the repository and run the installer:
 
-    git clone https://github.com/Roncax/shelf-matrix.git
+    git clone https://github.com/Roncax/shelf_matrix.git
     cd shelf-matrix
     sudo deploy/install-pi.sh
 
